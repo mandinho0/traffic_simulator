@@ -1,242 +1,247 @@
-import math
-import sys
-
+import csv
+import random
 import pygame
-from pygame.locals import *
 
-from Map.car import Car
-from Map.traficclass import TrafficLight
+from datetime import datetime
+from Map.Car import Car
+from Map.Crash import Crash
+from Map.EmergencyCar import EmergencyCar
+
+from Map.Intersection import Intersection
+from Map.TrafficLight import TrafficLight
+
+CRASH_POSITIONS = {
+    "top_left": [("l", (153, 132)), ("r", (363, 198)), ("b", (225, 269)), ("t", (293, 59))],
+    "top_mid": [("t", (651, 59)), ("l", (512, 131)), ("r", (722, 198)), ("b", (584, 268))],
+    "top_right": [("b", (948, 269)), ("r", (1088, 197)), ("t", (1016, 59)), ("l", (876, 131))],
+    "bottom_left": [("t", (291, 406)), ("r", (364, 546)), ("b", (225, 618)), ("l", (155, 482))],
+    "bottom_mid": [("b", (583, 618)), ("r", (722, 547)), ("t", (649, 409)), ("l",(512, 481))],
+    "bottom_right": [("l", (876, 480)), ("t", (1015, 409)), ("r", (1088, 547)), ("b", (948, 620))]
+}
 
 class Environment:
     def __init__(self):
-        # Initialize environment variables
-        self.cars = {}
-        self.traffic_lights = {}
-        self.light_status = {}
+        #Define o ecrã do ambiente
+        self.screen = pygame.display.set_mode((1280, 720))
+        self.bg_surf = pygame.image.load('Map/Resources/fundo.png').convert()
+        self.clock = pygame.time.Clock()
 
-        # Initialize Pygame
-        pygame.init()
+        #Array com os dias da semana e horas do dia
+        self.DAYS_OF_WEEK = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']
+        self.TIMES_OF_DAY = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', 
+                             '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23']
 
-        # Define screen dimensions
-        self.screen_width, self.screen_height = 1600, 900
-        self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+        #Definição das interseções/cruzamentos
+        self.intersections = pygame.sprite.Group()
+        self.intersections.add(Intersection(193, 450))  # bottom_left_intersection
+        self.intersections.add(Intersection(552, 450))  # bottom_mid_intersection
+        self.intersections.add(Intersection(917, 450))  # bottom_right_intersection
+        self.intersections.add(Intersection(193, 100))  # top_left_intersection
+        self.intersections.add(Intersection(552, 100))  # top_mid_intersection
+        self.intersections.add(Intersection(917, 100))  # top_right_intersection
 
-        # Define colors
-        self.green = (0, 255, 0)
-        self.gray = (128, 128, 128)
-        self.white = (255, 255, 255)
+        #Randomiza uma hora e um dia para a simulação
+        self.day_of_week = random.choice(self.DAYS_OF_WEEK)
+        self.time_of_day = random.choice(self.TIMES_OF_DAY)
 
-        #
-        self.street_width = 60
+        #Array com todos os carros e carros de emergencia do ambiente
+        self.cars = []
+        self.emergency_cars = []
+        self.emergency_cars_awaiting_time = {}
 
-        # Create a list to store road instances
-        self.roads = []
+        #Array com todos os semáforos do ambiente
+        self.traffic_lights = pygame.sprite.Group()
+        self.traffic_lights_objects = {}
+        self.traffic_lights_agents_tl = {}
 
-        self.build_map()
+        #Array com as posições dos carros
+        self.car_positions = {}
 
-    def get_roads_info(self):
-        return {
-            # horizontal roads
-            'H': {
-                (0, 1600, 185, 335),
-                (0, 1600, 535, 685)
-            },
+        #Array com os estados dos semáforos
+        self.traffic_lights_status = {}
 
-            # vertical roads
-            'V': {
-                (200, 350, 0, 1000),
-                (700, 850, 0, 1000),
-                (1200, 1350, 0, 1000),
-            }
-        }
+        # Carros parados nos semaforos
+        self.cars_stopped_at_tl = {}
 
-    def get_intersection_points(self):
-        return {
-            # Vertical Intersections
-            # Down Direction
-            # Road 1
-            (200, 160, 'R'), (200, 510, 'R'),
-            (230, 160, 'F'), (230, 510, 'F'),
-            (260, 160, 'L'), (260, 510, 'L'),
-            # Road 2
-            (700, 160, 'R'), (700, 510, 'R'),
-            (730, 160, 'F'), (730, 510, 'F'),
-            (760, 160, 'L'), (760, 510, 'L'),
-            # Road 3
-            (1200, 160, 'R'), (1200, 510, 'R'),
-            (1230, 160, 'F'), (1230, 510, 'F'),
-            (1260, 160, 'L'), (1260, 510, 'L'),
+        # Tempos de expera para registar num ficheiro excel
+        self.cars_stopped_times = []
 
-            # Up Direction
-            # Road 1
-            (290, 370, 'L'), (290, 720, 'L'),
-            (320, 370, 'F'), (320, 720, 'F'),
-            (350, 370, 'R'), (350, 720, 'R'),
-            # Road 2
-            (790, 370, 'L'), (790, 720, 'L'),
-            (820, 370, 'F'), (820, 720, 'F'),
-            (850, 370, 'R'), (850, 720, 'R'),
-            # Road 3
-            (1290, 370, 'L'), (1290, 720, 'L'),
-            (1320, 370, 'F'), (1320, 720, 'F'),
-            (1350, 370, 'R'), (1350, 720, 'R'),
+        #Flag de acidente no mapa e localização da mesma caso exista
+        self.map_crash = False
+        self.crash_position = (0, 0)
+        self.crash_location = ""
 
-            # Horizontal Intersections
-            # Right Direction
-            # Road 1
-            (170, 280, 'L'), (670, 280, 'L'), (1170, 280, 'L'),
-            (170, 310, 'F'), (670, 310, 'F'), (1170, 310, 'F'),
-            (170, 340, 'R'), (670, 340, 'R'), (1170, 340, 'R'),
-            # Road 2
-            (170, 630, 'L'), (670, 630, 'L'), (1170, 630, 'L'),
-            (170, 660, 'F'), (670, 660, 'F'), (1170, 660, 'F'),
-            (170, 690, 'R'), (670, 690, 'R'), (1170, 690, 'R'),
-
-            # Left Direction
-            # Road 1
-            (380, 190, 'R'), (880, 190, 'R'), (1380, 190, 'R'),
-            (380, 220, 'F'), (880, 220, 'F'), (1380, 220, 'F'),
-            (380, 250, 'L'), (880, 250, 'L'), (1380, 250, 'L'),
-            # Road 2
-            (380, 540, 'R'), (880, 540, 'R'), (1380, 540, 'R'),
-            (380, 570, 'F'), (880, 570, 'F'), (1380, 570, 'F'),
-            (380, 600, 'L'), (880, 600, 'L'), (1380, 600, 'L'),
-        }
-
-    # Add Goal
-    def add_goal(self, goal):
-        pygame.draw.circle(self.screen, (255, 0, 0), goal, 2)  # Red circle for the goal
-
-        self.render_map()
-
-    # CAR Methods
-    #
-    def add_car_position(self, car_id, pos, road_side, size, angle, car_image):
-        car = Car(pos, road_side, size, angle, car_image)
-        car.draw(self.screen)
-
-        self.cars[str(car_id)] = car  # Convert o JID em uma string
-        self.render_map()
-
-        return str(car_id)
-
-    def update_car_position(self, car, environment):
-        car_id = car.jid
-
-        if str(car_id) in self.cars:
-            car = self.cars[str(car_id)]
-
-            # moving car random
-            car.update_position(environment, car)
-
-            # refresh map
-            # self.rebuild_map()
+    #Valida se existe colisão de um carro com um cruzamento
+    #Se sim, retorna True, se não retorno False
+    def collision_sprite(self, sprite):
+        if pygame.sprite.spritecollide(sprite, self.intersections, False):
+            return True
         else:
-            print(f"JID {car_id} não encontrado no dicionário de posições de carros.")
+            return False
 
-    def get_car_position(self, car_id):
-        return self.cars[car_id]
+    #Guarda registo em fx CSV
+    def write_on_csv(self, data):
+        file_name = "waiting_cars_records_times.csv"
 
-    # TRAFFIC LIGHTS Methods
-    #
-    def add_traffic_light(self, tf_jid, x, y, size, angle, status):
-        traffic_light = TrafficLight(x, y, size, angle)
-        traffic_light.set_color(status)
-        traffic_light.draw(self.screen)
+        with open(file_name, 'a', newline='') as csv_file:
+            csv_writer = csv.writer(csv_file)
+            csv_writer.writerows(data)
 
-        self.traffic_lights[str(tf_jid)] = traffic_light
+        print('Records saved on file with name: ' + file_name)
+    
+    #Verifica se um determinado carro está num semáforo
+    def collision_traffic_light(self, sprite):
+        coll = pygame.sprite.spritecollide(sprite, self.traffic_lights, False)
+        if coll:
+            return (True, coll[0].id)
+        else:
+            return (False, 0)
 
-        # self.render_map()
-        return traffic_light
-
-    def update_light_status(self, light_id, traffic_light, status):
-        self.light_status[light_id] = status
-
-        traffic_light.set_color(status)
-        traffic_light.draw(self.screen)
-
-        # self.render_map()
-
-        print("Status of Light {} is now {}".format(light_id, status))
-
-    def get_light_status(self, light_id):
-        return self.light_status[light_id]
-
-    # Create Roads Method
-    #
-    def create_road(self, start_x, start_y, end_x, end_y, width, angle, road_divider='dashed'):
-        road_length = int(math.sqrt((end_x - start_x) ** 2 + (end_y - start_y) ** 2))
-        road = pygame.Surface((road_length, width * 3), pygame.SRCALPHA)
-
-        for i in range(3):
-            lane_height = width
-            lane_y = i * lane_height
-            pygame.draw.rect(road, self.gray, (0, lane_y, road_length, lane_height))
-
-        rotated_road = pygame.transform.rotate(road, angle)
-        self.screen.blit(rotated_road, (start_x, start_y))
-        self.roads.append((rotated_road, start_x, start_y, end_x, end_y, width))
-
-    # Build Map method
-    def build_map(self):
-        # # Set the background color to green
-        # self.screen.fill(self.green)
-        #
-        # # Horizontal Roads
-        # self.create_road(0, 100, 1600, 100, self.street_width, 0, road_divider="dashed")
-        # self.create_road(0, 450, 1600, 450, self.street_width, 0, road_divider="dashed")
-        # self.create_road(0, 800, 1600, 800, self.street_width, 0, road_divider="dashed")
-        #
-        # # Vertical Roads
-        # #
-        # self.create_road(200, 0, 200, 900, self.street_width, 90, road_divider="dashed")
-        # self.create_road(700, 0, 700, 900, self.street_width, 90, road_divider="dashed")
-        # self.create_road(1200, 0, 1200, 900, self.street_width, 90, road_divider="dashed")
-        #
-        # # Draw roads from the list
-        # for road in self.roads:
-        #     self.screen.blit(road[0], (road[1], road[2]))
-
-        self.screen.fill((0, 0, 0))
-        background_image = pygame.image.load("/home/isiauser/Desktop/AI/Map/assets/background/mapa_bg.jpg")
-        # Blit the background image onto the screen
-        self.screen.blit(background_image, (0, 0))
-
-        # self.render_map()
-
-    # Rebuild map to update car positions
-    def rebuild_map(self):
-        self.build_map()
-
-        #rint(self.traffic_lights.items())
-
-        # rebuild traffic lights
-        for tf_key, tf_instance in self.traffic_lights.items():
-            tf_instance.draw(self.screen)
-
-
-        #rebuild cars
-        for c_key, c_instance in self.cars.items():
-            c_instance.draw(self.screen)
-
-        self.render_map()
-
-
-    # Render Map method
-    def render_map(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-
-        # Update the display
-        pygame.display.update()
-
+    #Atualiza o mapa pygame
     def update_map(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                self.write_on_csv(self.cars_stopped_times)
                 pygame.quit()
-                sys.exit()
+                exit()
+        
+        self.intersections.draw(self.screen)
 
-        # Update the display
-        pygame.display.flip()
+        self.screen.blit(self.bg_surf, (0, 0))
+
+        if self.map_crash:
+            self.collisions.draw(self.screen)
+
+        #Desenha todos os semáforos no mapa
+        for tl in self.traffic_lights:
+            tl.draw()
+
+        #Desenha todos os carros no mapa
+        for car in self.cars:
+            car.sprites()[0].draw()
+        
+        #Desenha todos os veiculos de emergencia no mapa
+        for emergency_car in self.emergency_cars:
+            emergency_car.sprites()[0].draw()
+
+        #Apresenta no canto da janela a hora e o dia da simulação
+        pygame.font.init()
+        padding = 20
+        font_size = 14
+        font = pygame.font.SysFont('Sans', font_size, bold=True)
+        clock = font.render(str(self.day_of_week) + ', ' + str(self.time_of_day) + ':00', True, (255, 255, 255))
+        clock_surf = pygame.Surface((clock.get_size()[0] + padding, clock.get_size()[1] + padding))
+        clock_surf.fill((0, 0, 0))
+        clock_surf.blit(clock, (padding / 2, padding / 2))
+        self.screen.blit(clock_surf, (0, 720 - font_size - padding))
+        
+        pygame.display.update()
+        self.clock.tick(60)
+
+    #Adiciona um novo carro ao ambiente
+    #Retorna o objecto criado de volta para o agente, para que possam ser feitas alterações no seu estado
+    def add_car(self, car_id):
+        car = pygame.sprite.GroupSingle()
+        car.add(Car(self.screen, str(car_id).replace("car_", "").replace("@localhost", "")))
+        self.cars.append(car)
+
+        self.car_positions[str(car_id)] = car.sprites()[0].get_car_position()
+        
+        return car
+
+    #Obtem um carro pelo seu ID
+    def get_car_by_id(self, car_id):
+        for car_group in self.cars:
+            if car_group.sprites() and car_group.sprites()[0].id:
+                car_full_id = 'car_' + car_group.sprites()[0].id + "@localhost"
+                if car_full_id == car_id:
+                    return car_group
+        return None
+    
+    #Atualiza a posição de um carro
+    def update_car_position(self, car_id, car_pos):
+        self.car_positions[car_id] = (car_pos[0], car_pos[1], car_pos[2])
+        #print(car_id, self.car_positions[car_id])
+
+    #Devolve o array com as posições de todos os carros:
+    def get_car_positions(self):
+        return self.car_positions
+    
+    #Adiciona um novo semáforo ao ambiente
+    #Retorna o objecto criado de volta para o agente, para que possam ser feitas alterações no seu estado
+    def add_traffic_light(self, tl_jid, tl_id, tl_pos, angle):
+        tl = TrafficLight(self.screen, tl_id, tl_pos, angle)
+        self.traffic_lights.add(tl)
+
+        self.traffic_lights_objects[str(tl_id)] = tl
+        self.traffic_lights_agents_tl[str(tl_id)] = tl_jid
+        self.traffic_lights_status[str(tl_id)] = tl.get_status()
+        
+        return tl
+    
+    #Atualiza o estado do semáforo
+    def update_traffic_light_status(self, tl_id, status):
+        self.traffic_lights_status[tl_id] = status
+
+    #Retorna o estado do semáforo pelo ID
+    def get_traffic_light_status(self, tl_id):
+        return self.traffic_lights_status[str(tl_id)]
+    
+    #Retorna o JID do agente pelo id do semáforo
+    def get_traffic_light_jid_by_id(self, tl_id):
+        return self.traffic_lights_agents_tl[str(tl_id)]
+
+    #Adiciona um novo carro de emergencia ao ambiente
+    #Retorna o objecto criado de volta para o agente, para que possam ser feitas alterações no seu estado
+    def add_emergency_car(self, car_id):
+        car = pygame.sprite.GroupSingle()
+        car.add(EmergencyCar(self.screen, str(car_id).replace("car_", "").replace("@localhost", "")))
+        self.emergency_cars.append(car)
+
+        #self.car_positions[str(car_id)] = car.sprites()[0].get_car_position()
+        
+        return car
+    
+    #Ativa a flag de acidente no mapa
+    def activate_map_crash(self, crossing):
+        self.map_crash = True
+        self.crash_position = random.choice(CRASH_POSITIONS[crossing])
+
+        self.crash_location = crossing + "_" + self.crash_position[0]
+
+        self.collisions = pygame.sprite.Group()
+        self.collisions.add(Crash(self.crash_position[1])) 
+
+    #Desativa a flag de acidente no mapa
+    def deactivate_map_crash(self):
+        self.map_crash = False
+
+    #Dada posição do acidente e do carro no cruzamento, retorna a direção bloqueada que o carro não pode seguir
+    def determine_restricted_turn(self, crash_position, car_position):
+        restrictions = {
+            ('r', 't'): "l",
+            ('r', 'b'): "r",
+            ('r', 'l'): "c",
+            ('l', 't'): "r",
+            ('l', 'b'): "l",
+            ('l', 'r'): "c",
+            ('t', 'l'): "l",
+            ('t', 'r'): "r",
+            ('t', 'b'): "c",
+            ('b', 'l'): "r",
+            ('b', 'r'): "l",
+            ('b', 't'): "c",
+        }
+
+        return restrictions.get((crash_position, car_position), "")
+    
+    #Dada um acidente e um carro, retorna se o carro possui alguma restrição no seu percurso
+    def get_blocked_turn(self, tl, crash):
+        tl_to_open_txt_arr = str(tl).split("_") 
+        crash_location_txt_arr = str(crash).split("_") 
+
+        blocked_turn = ""
+        if self.map_crash and (tl_to_open_txt_arr[0] + tl_to_open_txt_arr[1]) == (crash_location_txt_arr[0] + crash_location_txt_arr[1]):
+            blocked_turn = self.determine_restricted_turn(crash_location_txt_arr[2], tl_to_open_txt_arr[2])
+
+        return blocked_turn
